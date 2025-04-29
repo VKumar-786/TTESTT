@@ -4,91 +4,95 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score
 from statsmodels.tsa.arima.model import ARIMA
-import io
+from io import StringIO
 
-st.title("📈 Predictive Sales Analysis Dashboard")
+st.set_page_config(page_title="Sales Forecasting Dashboard", layout="centered")
+st.title("Predictive Sales Analysis")
 
-uploaded_file = st.file_uploader("Upload your sales dataset (CSV)", type=["csv"])
+st.write("""
+Upload your time series sales data and compare forecasting models:
+- ARIMA
+- Linear Regression
+- Random Forest Regressor
+""")
+
+uploaded_file = st.file_uploader("Upload CSV", type="csv")
 
 if uploaded_file is not None:
-    try:
-        data = pd.read_csv(uploaded_file)
-        if 'Month' not in data.columns or 'Sales' not in data.columns:
-            st.error("Dataset must contain 'Month' and 'Sales' columns.")
-        else:
-            data['Month'] = pd.to_datetime(data['Month'])
-            data.set_index('Month', inplace=True)
-            st.subheader("Dataset Preview")
-            st.write(data.head())
+    data = pd.read_csv(uploaded_file)
 
-            # Split into training and testing sets
-            train = data.iloc[:int(0.75 * len(data))]
-            test = data.iloc[int(0.75 * len(data)):]
+    if 'Month' not in data.columns or 'Sales' not in data.columns:
+        st.error("CSV must contain 'Month' and 'Sales' columns.")
+    else:
+        data['Month'] = pd.to_datetime(data['Month'])
+        data.set_index('Month', inplace=True)
 
-            # ARIMA Forecasting
-            arima_model = ARIMA(data['Sales'], order=(1, 1, 1))
+        st.subheader("Raw Data")
+        st.dataframe(data.tail())
+
+        train = data.iloc[:int(0.75 * len(data))]
+        test = data.iloc[int(0.75 * len(data)):]        
+
+        # ARIMA Model
+        with st.spinner('Fitting ARIMA model...'):
+            arima_model = ARIMA(data['Sales'], order=(1,1,1))
             arima_fit = arima_model.fit()
             forecast_arima = arima_fit.forecast(steps=len(test))
 
-            st.subheader("ARIMA Forecast")
-            fig, ax = plt.subplots(figsize=(10, 4))
-            ax.plot(data['Sales'], label='Historical Sales')
-            ax.plot(test.index, forecast_arima, label='ARIMA Forecast', linestyle='--', marker='o')
-            ax.set_xlabel('Month')
-            ax.set_ylabel('Sales')
-            ax.legend()
-            st.pyplot(fig)
+        st.subheader("ARIMA Forecast")
+        fig, ax = plt.subplots()
+        ax.plot(data['Sales'], label='Historical Sales')
+        ax.plot(test.index, forecast_arima, label='ARIMA Forecast', linestyle='--')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Sales')
+        ax.legend()
+        st.pyplot(fig)
 
-            # Evaluation Metrics for ARIMA
-            arima_mse = mean_squared_error(test['Sales'], forecast_arima)
-            arima_rmse = np.sqrt(arima_mse)
-            arima_r2 = r2_score(test['Sales'], forecast_arima)
+        arima_rmse = np.sqrt(mean_squared_error(test['Sales'], forecast_arima))
+        arima_r2 = r2_score(test['Sales'], forecast_arima)
+        st.write(f"ARIMA RMSE: {arima_rmse:.2f}")
+        st.write(f"ARIMA R²: {arima_r2:.2f}")
 
-            st.write("🔍 ARIMA Evaluation Metrics")
-            st.write(f"Mean Squared Error (MSE): {arima_mse:.2f}")
-            st.write(f"Root Mean Squared Error (RMSE): {arima_rmse:.2f}")
-            st.write(f"R-squared (R²): {arima_r2:.2f}")
+        # Prepare Data for Regression
+        X_train = np.arange(len(train)).reshape(-1, 1)
+        X_test = np.arange(len(train), len(train) + len(test)).reshape(-1, 1)
+        y_train = train['Sales'].values
+        y_test = test['Sales'].values
 
-            # Prepare data for regression
-            X_train = np.arange(len(train)).reshape(-1, 1)
-            X_test = np.arange(len(train), len(train) + len(test)).reshape(-1, 1)
-            y_train = train['Sales']
-            y_test = test['Sales']
-
-            # Linear Regression
-            lr = LinearRegression()
-            lr.fit(X_train, y_train)
+        # Linear Regression Model
+        with st.spinner('Fitting Linear Regression model...'):
+            lr = LinearRegression().fit(X_train, y_train)
             lr_pred = lr.predict(X_test)
 
-            lr_mse = mean_squared_error(y_test, lr_pred)
-            lr_rmse = np.sqrt(lr_mse)
-            lr_r2 = r2_score(y_test, lr_pred)
+        st.subheader("Linear Regression Forecast")
+        fig_lr, ax_lr = plt.subplots()
+        ax_lr.plot(test.index, y_test, label='Actual Sales', marker='o')
+        ax_lr.plot(test.index, lr_pred, label='Linear Regression Forecast', linestyle='--')
+        ax_lr.set_xlabel('Month')
+        ax_lr.set_ylabel('Sales')
+        ax_lr.legend()
+        st.pyplot(fig_lr)
 
-            # Random Forest
-            rf = RandomForestRegressor(n_estimators=100, random_state=42)
-            rf.fit(X_train, y_train)
+        st.write("### Linear Regression Metrics")
+        st.write(f"RMSE: {np.sqrt(mean_squared_error(y_test, lr_pred)):.2f}")
+        st.write(f"R²: {r2_score(y_test, lr_pred):.2f}")
+
+        # Random Forest Model
+        with st.spinner('Fitting Random Forest model...'):
+            rf = RandomForestRegressor(n_estimators=100, random_state=42).fit(X_train, y_train)
             rf_pred = rf.predict(X_test)
 
-            rf_mse = mean_squared_error(y_test, rf_pred)
-            rf_rmse = np.sqrt(rf_mse)
-            rf_r2 = r2_score(y_test, rf_pred)
+        st.subheader("Random Forest Forecast")
+        fig_rf, ax_rf = plt.subplots()
+        ax_rf.plot(test.index, y_test, label='Actual Sales', marker='o')
+        ax_rf.plot(test.index, rf_pred, label='Random Forest Forecast', linestyle='-.')
+        ax_rf.set_xlabel('Month')
+        ax_rf.set_ylabel('Sales')
+        ax_rf.legend()
+        st.pyplot(fig_rf)
 
-            # Plot comparisons
-            st.subheader("Model Comparison: Linear Regression vs Random Forest")
-            fig2, ax2 = plt.subplots(figsize=(10, 4))
-            ax2.plot(test.index, y_test.values, label="Actual", marker='x')
-            ax2.plot(test.index, lr_pred, label="Linear Regression", linestyle='--')
-            ax2.plot(test.index, rf_pred, label="Random Forest", linestyle='-.')
-            ax2.legend()
-            st.pyplot(fig2)
-
-            st.write("📊 Linear Regression Metrics")
-            st.write(f"RMSE: {lr_rmse:.2f}, R²: {lr_r2:.2f}")
-
-            st.write("🌲 Random Forest Metrics")
-            st.write(f"RMSE: {rf_rmse:.2f}, R²: {rf_r2:.2f}")
-
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
+        st.write("### Random Forest Metrics")
+        st.write(f"RMSE: {np.sqrt(mean_squared_error(y_test, rf_pred)):.2f}")
+        st.write(f"R²: {r2_score(y_test, rf_pred):.2f}")
