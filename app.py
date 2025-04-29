@@ -201,4 +201,6 @@ if uploaded_file is not None:
             "Random Forest Forecast": rf_pred,
             "LSTM Forecast": predicted_sales_lstm.flatten()
         })
-        st.dataframe(forecast_table.set_index("
+        st.dataframe(forecast_table.set_index("Date"))
+
+        st.success("Sales forecasting complete!")
