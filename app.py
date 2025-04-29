@@ -30,13 +30,18 @@ if uploaded_file is not None:
         data.drop_duplicates(inplace=True)
         data.dropna(inplace=True)
 
-        # Handling both Month names and Full date formats
-        if data['Month'].str.contains('-').any():  # This checks if there's a full date in your data
-            data['Month'] = pd.to_datetime(data['Month'], format='%Y-%m-%d')  # Full date format
-        else:
-            # For month names like "January", "February", append a year and convert to datetime
-            data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%B %Y')  # Assuming year is 2023
-        
+        # Check if month contains full date format or just month name
+        try:
+            # Try converting month to datetime if it contains full date
+            data['Month'] = pd.to_datetime(data['Month'], format='%Y-%m-%d')
+        except Exception as e:
+            # Handle month names like 'January', 'February', etc.
+            try:
+                data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%B %Y')  # Adding 2023 as a default year
+            except Exception as e:
+                st.error(f"Error converting Month data: {e}")
+                st.stop()
+
         data.set_index('Month', inplace=True)
 
         st.subheader("Cleaned Data")
