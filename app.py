@@ -6,10 +6,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
 from statsmodels.tsa.arima.model import ARIMA
+from io import BytesIO
+from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
-from sklearn.preprocessing import MinMaxScaler
-from io import BytesIO
 
 st.set_page_config(page_title="Sales Forecasting Dashboard", layout="centered")
 st.title("Predictive Sales Analysis")
@@ -19,12 +19,13 @@ Upload your time series sales data and compare forecasting models:
 - ARIMA
 - Linear Regression
 - Random Forest Regressor
-- LSTM (Long Short Term Memory)
+- LSTM Neural Network
 
 The app will clean the data by removing missing values and duplicates.
 """)
 
 uploaded_file = st.file_uploader("Upload CSV", type="csv")
+forecast_steps = st.slider("Forecast future months beyond test set", 0, 12, 0)
 
 if uploaded_file is not None:
     data = pd.read_csv(uploaded_file)
@@ -32,11 +33,9 @@ if uploaded_file is not None:
     if 'Month' not in data.columns or 'Sales' not in data.columns:
         st.error("CSV must contain 'Month' and 'Sales' columns.")
     else:
-        # Data Cleaning
         data.drop_duplicates(inplace=True)
         data.dropna(inplace=True)
 
-        # Flexible date parsing for various formats
         try:
             data['Month'] = pd.to_datetime(data['Month'], errors='raise', dayfirst=True)
         except Exception:
@@ -58,120 +57,104 @@ if uploaded_file is not None:
             st.stop()
 
         data.set_index('Month', inplace=True)
-
         st.subheader("Cleaned Data")
         st.dataframe(data.tail())
 
         train = data.iloc[:int(0.75 * len(data))]
-        test = data.iloc[int(0.75 * len(data)):]
+        test = data.iloc[int(0.75 * len(data)):]        
 
         # ARIMA Model
         with st.spinner('Fitting ARIMA model...'):
             arima_model = ARIMA(data['Sales'], order=(1,1,1))
             arima_fit = arima_model.fit()
-            forecast_arima = arima_fit.forecast(steps=len(test))
+            forecast_arima = arima_fit.forecast(steps=len(test)+forecast_steps)
 
-        # Linear Regression Model
-        X_train = np.arange(len(train)).reshape(-1, 1)
-        X_test = np.arange(len(train), len(train) + len(test)).reshape(-1, 1)
-        y_train = train['Sales'].values
-        y_test = test['Sales'].values
+        # Linear Regression
+        X = np.arange(len(data)).reshape(-1, 1)
+        y = data['Sales'].values
+        lr = LinearRegression().fit(X[:len(train)], y[:len(train)])
+        lr_pred = lr.predict(np.arange(len(train), len(data) + forecast_steps).reshape(-1, 1))
 
-        with st.spinner('Fitting Linear Regression model...'):
-            lr = LinearRegression().fit(X_train, y_train)
-            lr_pred = lr.predict(X_test)
-
-        # Random Forest Model
-        with st.spinner('Fitting Random Forest model...'):
-            rf = RandomForestRegressor(n_estimators=100, random_state=42).fit(X_train, y_train)
-            rf_pred = rf.predict(X_test)
+        # Random Forest
+        rf = RandomForestRegressor(n_estimators=100, random_state=42).fit(X[:len(train)], y[:len(train)])
+        rf_pred = rf.predict(np.arange(len(train), len(data) + forecast_steps).reshape(-1, 1))
 
         # LSTM Model
-        with st.spinner('Fitting LSTM model...'):
-            # Data Scaling for LSTM
-            scaler = MinMaxScaler(feature_range=(0, 1))
-            scaled_data = scaler.fit_transform(data['Sales'].values.reshape(-1, 1))
+        scaler = MinMaxScaler()
+        sales_scaled = scaler.fit_transform(data['Sales'].values.reshape(-1,1))
 
-            # Prepare data for LSTM (X, y creation)
-            look_back = 10  # Number of previous days to predict next day's sales
-            X_lstm, y_lstm = [], []
-            for i in range(look_back, len(scaled_data)):
-                X_lstm.append(scaled_data[i-look_back:i, 0])  # Taking look_back days' data
-                y_lstm.append(scaled_data[i, 0])  # Target is the next day's sales
-            X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
+        def create_sequences(data, seq_length):
+            x, y = [], []
+            for i in range(len(data)-seq_length):
+                x.append(data[i:i+seq_length])
+                y.append(data[i+seq_length])
+            return np.array(x), np.array(y)
 
-            # Reshape X_lstm to be 3D (samples, time_steps, features)
-            X_lstm = np.reshape(X_lstm, (X_lstm.shape[0], X_lstm.shape[1], 1))
+        SEQ_LEN = 5
+        X_lstm, y_lstm = create_sequences(sales_scaled, SEQ_LEN)
+        split = int(0.75 * len(X_lstm))
+        X_train_lstm, X_test_lstm = X_lstm[:split], X_lstm[split:]
+        y_train_lstm, y_test_lstm = y_lstm[:split], y_lstm[split:]
 
-            # Define LSTM Model
-            model = Sequential()
-            model.add(LSTM(units=50, return_sequences=False, input_shape=(X_lstm.shape[1], 1)))
-            model.add(Dense(units=1))
+        model = Sequential([
+            LSTM(50, activation='relu', input_shape=(SEQ_LEN, 1)),
+            Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+        with st.spinner('Training LSTM model...'):
+            history = model.fit(X_train_lstm, y_train_lstm, epochs=50, verbose=0)
 
-            # Compile and Fit the Model
-            model.compile(optimizer='adam', loss='mean_squared_error')
-            model.fit(X_lstm, y_lstm, epochs=10, batch_size=32)
+        lstm_pred = model.predict(X_test_lstm)
+        lstm_pred = scaler.inverse_transform(lstm_pred).flatten()
+        lstm_dates = data.index[SEQ_LEN+split:SEQ_LEN+split+len(lstm_pred)]
 
-            # Predict the Sales (using the same reshaped data)
-            lstm_predictions = model.predict(X_lstm)
-
-            # Inverse transform predictions to original scale
-            predicted_sales_lstm = scaler.inverse_transform(lstm_predictions)
-
-        # Forecast Visualizations (Separate for each model)
+        # Forecast Visualizations
         st.subheader("Forecast Visualizations")
 
-        for model_name, prediction in zip([
-            "ARIMA", "Linear Regression", "Random Forest", "LSTM"],
-            [forecast_arima, lr_pred, rf_pred, predicted_sales_lstm]
-        ):
+        model_preds = [
+            ("ARIMA", forecast_arima, pd.date_range(start=test.index[0], periods=len(forecast_arima), freq='MS')),
+            ("Linear Regression", lr_pred, pd.date_range(start=test.index[0], periods=len(lr_pred), freq='MS')),
+            ("Random Forest", rf_pred, pd.date_range(start=test.index[0], periods=len(rf_pred), freq='MS')),
+            ("LSTM", lstm_pred, lstm_dates)
+        ]
+
+        for name, pred, idx in model_preds:
             fig, ax = plt.subplots(figsize=(10, 4))
             ax.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-            ax.plot(test.index, prediction, label=f'{model_name} Forecast', linestyle='--')
-            ax.set_title(f"{model_name} Sales Forecast")
+            ax.plot(idx, pred, label=f'{name} Forecast', linestyle='--')
+            ax.set_title(f"{name} Sales Forecast")
             ax.set_xlabel('Month')
             ax.set_ylabel('Sales')
             ax.legend()
             st.pyplot(fig)
 
-        # Metrics Calculation
-        arima_rmse = np.sqrt(mean_squared_error(y_test, forecast_arima))
-        arima_r2 = r2_score(y_test, forecast_arima)
-        arima_mape = mean_absolute_percentage_error(y_test, forecast_arima)
-        arima_accuracy = 100 - arima_mape * 100
+        st.subheader("Model Comparison: Accuracy")
+        y_test_range = len(y_test_lstm)
 
-        lr_rmse = np.sqrt(mean_squared_error(y_test, lr_pred))
-        lr_r2 = r2_score(y_test, lr_pred)
-        lr_mape = mean_absolute_percentage_error(y_test, lr_pred)
-        lr_accuracy = 100 - lr_mape * 100
+        def safe_metrics(y_true, y_pred):
+            return (
+                np.sqrt(mean_squared_error(y_true, y_pred)),
+                r2_score(y_true, y_pred),
+                mean_absolute_percentage_error(y_true, y_pred),
+                100 - mean_absolute_percentage_error(y_true, y_pred) * 100
+            )
 
-        rf_rmse = np.sqrt(mean_squared_error(y_test, rf_pred))
-        rf_r2 = r2_score(y_test, rf_pred)
-        rf_mape = mean_absolute_percentage_error(y_test, rf_pred)
-        rf_accuracy = 100 - rf_mape * 100
+        arima_rmse, arima_r2, arima_mape, arima_acc = safe_metrics(y[-y_test_range:], forecast_arima[:y_test_range])
+        lr_rmse, lr_r2, lr_mape, lr_acc = safe_metrics(y[-y_test_range:], lr_pred[:y_test_range])
+        rf_rmse, rf_r2, rf_mape, rf_acc = safe_metrics(y[-y_test_range:], rf_pred[:y_test_range])
+        lstm_rmse, lstm_r2, lstm_mape, lstm_acc = safe_metrics(y_test_lstm, lstm_pred)
 
-        lstm_rmse = np.sqrt(mean_squared_error(y_lstm, lstm_predictions))
-        lstm_r2 = r2_score(y_lstm, lstm_predictions)
-        lstm_mape = mean_absolute_percentage_error(y_lstm, lstm_predictions)
-        lstm_accuracy = 100 - lstm_mape * 100
-
-        st.subheader("Model Metrics")
         metrics_df = pd.DataFrame({
             "Model": ["ARIMA", "Linear Regression", "Random Forest", "LSTM"],
             "RMSE": [arima_rmse, lr_rmse, rf_rmse, lstm_rmse],
             "R²": [arima_r2, lr_r2, rf_r2, lstm_r2],
-            "MAPE": [arima_mape, lr_mape, rf_mape, lstm_mape],
-            "Accuracy (%)": [arima_accuracy, lr_accuracy, rf_accuracy, lstm_accuracy]
+            "MAPE": [arima_mape, lr_mape, rf_mape],
+            "Accuracy (%)": [arima_acc, lr_acc, rf_acc, lstm_acc]
         })
         st.dataframe(metrics_df.set_index("Model"))
 
-        # Comparison Chart
-        st.subheader("Model Comparison: Accuracy")
-        models = ["ARIMA", "Linear Regression", "Random Forest", "LSTM"]
-        accuracies = [arima_accuracy, lr_accuracy, rf_accuracy, lstm_accuracy]
-
         fig_comp, ax_comp = plt.subplots()
-        bars = ax_comp.bar(models, accuracies, color=['skyblue', 'orange', 'green', 'purple'])
+        bars = ax_comp.bar(metrics_df['Model'], metrics_df['Accuracy (%)'], color=['skyblue', 'orange', 'green', 'purple'])
         ax_comp.set_ylim([0, 100])
         ax_comp.set_ylabel("Accuracy (%)")
         ax_comp.set_title("Forecasting Model Accuracy Comparison")
@@ -180,7 +163,6 @@ if uploaded_file is not None:
             ax_comp.text(bar.get_x() + bar.get_width()/2, height - 5, f'{height:.1f}%', ha='center', va='bottom', color='white')
         st.pyplot(fig_comp)
 
-        # Save and download comparison chart
         buf = BytesIO()
         fig_comp.savefig(buf, format="png")
         buf.seek(0)
@@ -191,16 +173,18 @@ if uploaded_file is not None:
             mime="image/png"
         )
 
-        # Forecasted Table
         st.subheader("Forecasted Results")
         forecast_table = pd.DataFrame({
-            "Date": test.index,
-            "Actual Sales": y_test,
-            "ARIMA Forecast": forecast_arima,
+            "Date": pd.date_range(start=test.index[0], periods=len(lr_pred), freq='MS'),
+            "ARIMA Forecast": forecast_arima.values,
             "Linear Regression Forecast": lr_pred,
-            "Random Forest Forecast": rf_pred,
-            "LSTM Forecast": predicted_sales_lstm.flatten()
+            "Random Forest Forecast": rf_pred
         })
-        st.dataframe(forecast_table.set_index("Date"))
 
-        st.success("Sales forecasting complete!")
+        lstm_table = pd.DataFrame({
+            "Date": lstm_dates,
+            "LSTM Forecast": lstm_pred
+        })
+
+        forecast_table = pd.merge(forecast_table, lstm_table, on="Date", how="outer").set_index("Date")
+        st.dataframe(forecast_table.tail())
