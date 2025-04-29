@@ -30,7 +30,13 @@ if uploaded_file is not None:
         data.drop_duplicates(inplace=True)
         data.dropna(inplace=True)
 
-        data['Month'] = pd.to_datetime(data['Month'])
+        # Handling both Month names and Full date formats
+        if data['Month'].str.contains('-').any():  # This checks if there's a full date in your data
+            data['Month'] = pd.to_datetime(data['Month'], format='%Y-%m-%d')  # Full date format
+        else:
+            # For month names like "January", "February", append a year and convert to datetime
+            data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%B %Y')  # Assuming year is 2023
+        
         data.set_index('Month', inplace=True)
 
         st.subheader("Cleaned Data")
@@ -60,38 +66,35 @@ if uploaded_file is not None:
             rf = RandomForestRegressor(n_estimators=100, random_state=42).fit(X_train, y_train)
             rf_pred = rf.predict(X_test)
 
-        st.subheader("Sales Forecasting Models")
-
-        # ARIMA Forecast Graph
-        st.subheader("ARIMA Model Forecast")
+        st.subheader("Forecast Visualization")
+        
+        # ARIMA plot
         fig_arima, ax_arima = plt.subplots(figsize=(12,6))
         ax_arima.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-        ax_arima.plot(test.index, forecast_arima, label='ARIMA Forecast', linestyle='--')
+        ax_arima.plot(test.index, forecast_arima, label='ARIMA Forecast', linestyle='--', color='red')
         ax_arima.set_xlabel('Month')
         ax_arima.set_ylabel('Sales')
-        ax_arima.set_title('ARIMA Forecast for Sales')
+        ax_arima.set_title('ARIMA Sales Forecast')
         ax_arima.legend()
         st.pyplot(fig_arima)
 
-        # Linear Regression Forecast Graph
-        st.subheader("Linear Regression Model Forecast")
+        # Linear Regression plot
         fig_lr, ax_lr = plt.subplots(figsize=(12,6))
         ax_lr.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-        ax_lr.plot(test.index, lr_pred, label='Linear Regression Forecast', linestyle='-.')
+        ax_lr.plot(test.index, lr_pred, label='Linear Regression Forecast', linestyle='-.', color='blue')
         ax_lr.set_xlabel('Month')
         ax_lr.set_ylabel('Sales')
-        ax_lr.set_title('Linear Regression Forecast for Sales')
+        ax_lr.set_title('Linear Regression Sales Forecast')
         ax_lr.legend()
         st.pyplot(fig_lr)
 
-        # Random Forest Forecast Graph
-        st.subheader("Random Forest Model Forecast")
+        # Random Forest plot
         fig_rf, ax_rf = plt.subplots(figsize=(12,6))
         ax_rf.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-        ax_rf.plot(test.index, rf_pred, label='Random Forest Forecast', linestyle=':')
+        ax_rf.plot(test.index, rf_pred, label='Random Forest Forecast', linestyle=':', color='green')
         ax_rf.set_xlabel('Month')
         ax_rf.set_ylabel('Sales')
-        ax_rf.set_title('Random Forest Forecast for Sales')
+        ax_rf.set_title('Random Forest Sales Forecast')
         ax_rf.legend()
         st.pyplot(fig_rf)
 
@@ -121,6 +124,32 @@ if uploaded_file is not None:
         })
         st.dataframe(metrics_df.set_index("Model"))
 
+        # Comparison Chart
+        st.subheader("Model Comparison: Accuracy")
+        models = ["ARIMA", "Linear Regression", "Random Forest"]
+        accuracies = [arima_accuracy, lr_accuracy, rf_accuracy]
+
+        fig_comp, ax_comp = plt.subplots()
+        bars = ax_comp.bar(models, accuracies, color=['skyblue', 'orange', 'green'])
+        ax_comp.set_ylim([0, 100])
+        ax_comp.set_ylabel("Accuracy (%)")
+        ax_comp.set_title("Forecasting Model Accuracy Comparison")
+        for bar in bars:
+            height = bar.get_height()
+            ax_comp.text(bar.get_x() + bar.get_width()/2, height - 5, f'{height:.1f}%', ha='center', va='bottom', color='white')
+        st.pyplot(fig_comp)
+
+        # Save and download comparison chart
+        buf = BytesIO()
+        fig_comp.savefig(buf, format="png")
+        buf.seek(0)
+        st.download_button(
+            label="Download Comparison Chart as PNG",
+            data=buf,
+            file_name="model_comparison.png",
+            mime="image/png"
+        )
+
         # Forecasted Table
         st.subheader("Forecasted Results")
         forecast_table = pd.DataFrame({
@@ -131,4 +160,3 @@ if uploaded_file is not None:
             "Random Forest Forecast": rf_pred
         })
         st.dataframe(forecast_table.set_index("Date"))
-
