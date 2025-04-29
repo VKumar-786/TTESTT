@@ -6,7 +6,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
 from statsmodels.tsa.arima.model import ARIMA
-from io import StringIO, BytesIO
+from io import BytesIO
 
 st.set_page_config(page_title="Sales Forecasting Dashboard", layout="centered")
 st.title("Predictive Sales Analysis")
@@ -16,6 +16,8 @@ Upload your time series sales data and compare forecasting models:
 - ARIMA
 - Linear Regression
 - Random Forest Regressor
+
+The app will clean the data by removing missing values and duplicates.
 """)
 
 uploaded_file = st.file_uploader("Upload CSV", type="csv")
@@ -30,14 +32,13 @@ if uploaded_file is not None:
         data.drop_duplicates(inplace=True)
         data.dropna(inplace=True)
 
-        # Check if month contains full date format or just month name
         try:
-            # Try converting month to datetime if it contains full date
-            data['Month'] = pd.to_datetime(data['Month'], format='%Y-%m-%d')
-        except Exception as e:
-            # Handle month names like 'January', 'February', etc.
+            # Try parsing full month names (e.g., January)
+            data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%B %Y')
+        except:
             try:
-                data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%B %Y')  # Adding 2023 as a default year
+                # Try parsing short month names (e.g., Jan)
+                data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%b %Y')
             except Exception as e:
                 st.error(f"Error converting Month data: {e}")
                 st.stop()
@@ -71,37 +72,21 @@ if uploaded_file is not None:
             rf = RandomForestRegressor(n_estimators=100, random_state=42).fit(X_train, y_train)
             rf_pred = rf.predict(X_test)
 
-        st.subheader("Forecast Visualization")
-        
-        # ARIMA plot
-        fig_arima, ax_arima = plt.subplots(figsize=(12,6))
-        ax_arima.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-        ax_arima.plot(test.index, forecast_arima, label='ARIMA Forecast', linestyle='--', color='red')
-        ax_arima.set_xlabel('Month')
-        ax_arima.set_ylabel('Sales')
-        ax_arima.set_title('ARIMA Sales Forecast')
-        ax_arima.legend()
-        st.pyplot(fig_arima)
+        # Forecast Visualizations (Separate for each model)
+        st.subheader("Forecast Visualizations")
 
-        # Linear Regression plot
-        fig_lr, ax_lr = plt.subplots(figsize=(12,6))
-        ax_lr.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-        ax_lr.plot(test.index, lr_pred, label='Linear Regression Forecast', linestyle='-.', color='blue')
-        ax_lr.set_xlabel('Month')
-        ax_lr.set_ylabel('Sales')
-        ax_lr.set_title('Linear Regression Sales Forecast')
-        ax_lr.legend()
-        st.pyplot(fig_lr)
-
-        # Random Forest plot
-        fig_rf, ax_rf = plt.subplots(figsize=(12,6))
-        ax_rf.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
-        ax_rf.plot(test.index, rf_pred, label='Random Forest Forecast', linestyle=':', color='green')
-        ax_rf.set_xlabel('Month')
-        ax_rf.set_ylabel('Sales')
-        ax_rf.set_title('Random Forest Sales Forecast')
-        ax_rf.legend()
-        st.pyplot(fig_rf)
+        for model_name, prediction in zip([
+            "ARIMA", "Linear Regression", "Random Forest"],
+            [forecast_arima, lr_pred, rf_pred]
+        ):
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(data.index, data['Sales'], label='Historical Sales', linewidth=2)
+            ax.plot(test.index, prediction, label=f'{model_name} Forecast', linestyle='--')
+            ax.set_title(f"{model_name} Sales Forecast")
+            ax.set_xlabel('Month')
+            ax.set_ylabel('Sales')
+            ax.legend()
+            st.pyplot(fig)
 
         # Metrics Calculation
         arima_rmse = np.sqrt(mean_squared_error(y_test, forecast_arima))
