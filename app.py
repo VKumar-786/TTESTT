@@ -32,16 +32,26 @@ if uploaded_file is not None:
         data.drop_duplicates(inplace=True)
         data.dropna(inplace=True)
 
+        # Flexible date parsing for various formats
         try:
-            # Try parsing full month names (e.g., January)
-            data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%B %Y')
-        except:
+            data['Month'] = pd.to_datetime(data['Month'], errors='raise', dayfirst=True)
+        except Exception:
             try:
-                # Try parsing short month names (e.g., Jan)
-                data['Month'] = pd.to_datetime(data['Month'] + ' 2023', format='%b %Y')
-            except Exception as e:
-                st.error(f"Error converting Month data: {e}")
-                st.stop()
+                data['Month'] = pd.to_datetime(data['Month'].astype(str) + ' 2023', format='%B %Y')
+            except Exception:
+                try:
+                    data['Month'] = pd.to_datetime(data['Month'].astype(str) + ' 2023', format='%b %Y')
+                except Exception:
+                    try:
+                        data['Month'] = pd.to_datetime(data['Month'].astype(str), format='%m', errors='coerce')
+                        data['Month'] = data['Month'].fillna(pd.to_datetime('2023-' + data['Month'].astype(str).str.zfill(2) + '-01', errors='coerce'))
+                    except Exception as e:
+                        st.error(f"Error converting Month data: {e}")
+                        st.stop()
+
+        if data['Month'].isnull().any():
+            st.error("Some dates could not be parsed. Please check your data.")
+            st.stop()
 
         data.set_index('Month', inplace=True)
 
