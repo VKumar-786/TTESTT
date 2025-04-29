@@ -7,9 +7,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
 from statsmodels.tsa.arima.model import ARIMA
 from io import BytesIO
-from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
+from sklearn.preprocessing import MinMaxScaler
 
 st.set_page_config(page_title="Sales Forecasting Dashboard", layout="centered")
 st.title("Predictive Sales Analysis")
@@ -19,7 +19,7 @@ Upload your time series sales data and compare forecasting models:
 - ARIMA
 - Linear Regression
 - Random Forest Regressor
-- LSTM (Long Short-Term Memory)
+- LSTM
 
 The app will clean the data by removing missing values and duplicates.
 """)
@@ -67,18 +67,9 @@ if uploaded_file is not None:
 
         # ARIMA Model
         with st.spinner('Fitting ARIMA model...'):
-            freq = pd.infer_freq(data.index)
-            if freq:
-                data = data.asfreq(freq)
-            else:
-                st.warning("Could not infer frequency. Setting to monthly.")
-                data = data.asfreq('MS')  # MS: Month Start
-
-            arima_model = ARIMA(data['Sales'], order=(1, 1, 1))
+            arima_model = ARIMA(data['Sales'], order=(1,1,1))
             arima_fit = arima_model.fit()
-            forecast_index = pd.date_range(start=test.index[0], periods=len(test), freq=data.index.freq)
             forecast_arima = arima_fit.forecast(steps=len(test))
-            forecast_arima.index = forecast_index
 
         # Linear Regression Model
         X_train = np.arange(len(train)).reshape(-1, 1)
@@ -97,35 +88,37 @@ if uploaded_file is not None:
 
         # LSTM Model
         with st.spinner('Fitting LSTM model...'):
+            # Scaling data for LSTM
             scaler = MinMaxScaler(feature_range=(0, 1))
             scaled_data = scaler.fit_transform(data['Sales'].values.reshape(-1, 1))
+            
+            # Prepare LSTM dataset
+            X_lstm = []
+            y_lstm = []
+            for i in range(60, len(scaled_data)):
+                X_lstm.append(scaled_data[i-60:i, 0])
+                y_lstm.append(scaled_data[i, 0])
+            X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
 
-            def create_dataset(data, time_step=1):
-                X, y = [], []
-                for i in range(len(data) - time_step - 1):
-                    X.append(data[i:(i + time_step), 0])
-                    y.append(data[i + time_step, 0])
-                return np.array(X), np.array(y)
+            # Reshape X_lstm for LSTM input [samples, time steps, features]
+            X_lstm = np.reshape(X_lstm, (X_lstm.shape[0], X_lstm.shape[1], 1))
 
-            time_step = 12  # Monthly data
-            X, y = create_dataset(scaled_data, time_step)
-            X = X.reshape(X.shape[0], X.shape[1], 1)
+            # Build LSTM model
+            lstm_model = Sequential()
+            lstm_model.add(LSTM(units=50, return_sequences=True, input_shape=(X_lstm.shape[1], 1)))
+            lstm_model.add(LSTM(units=50, return_sequences=False))
+            lstm_model.add(Dense(units=1))
+            lstm_model.compile(optimizer='adam', loss='mean_squared_error')
+            lstm_model.fit(X_lstm, y_lstm, epochs=20, batch_size=32)
 
-            model = Sequential()
-            model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
-            model.add(LSTM(units=50, return_sequences=False))
-            model.add(Dense(units=1))
-
-            model.compile(optimizer='adam', loss='mean_squared_error')
-            model.fit(X, y, epochs=20, batch_size=32)
-
-            X_test = np.arange(len(train), len(train) + len(test)).reshape(-1, 1)
-            X_test_scaled = scaler.transform(X_test)
-
-            # LSTM forecast
-            X_lstm, _ = create_dataset(X_test_scaled, time_step)
-            X_lstm = X_lstm.reshape(X_lstm.shape[0], X_lstm.shape[1], 1)
-            lstm_pred = model.predict(X_lstm)
+            # Predicting the Test set results
+            test_data = scaled_data[len(scaled_data) - len(test) - 60:]
+            X_test_lstm = []
+            for i in range(60, len(test_data)):
+                X_test_lstm.append(test_data[i-60:i, 0])
+            X_test_lstm = np.array(X_test_lstm)
+            X_test_lstm = np.reshape(X_test_lstm, (X_test_lstm.shape[0], X_test_lstm.shape[1], 1))
+            lstm_pred = lstm_model.predict(X_test_lstm)
             lstm_pred = scaler.inverse_transform(lstm_pred)
 
         # Forecast Visualizations (Separate for each model)
@@ -195,4 +188,20 @@ if uploaded_file is not None:
         fig_comp.savefig(buf, format="png")
         buf.seek(0)
         st.download_button(
-            label="Download Comparison Chart as PNG
+            label="Download Comparison Chart as PNG",
+            data=buf,
+            file_name="sales_comparison_chart.png",
+            mime="image/png"
+        )
+
+        # Forecasted Table
+        st.subheader("Forecasted Results")
+        forecast_table = pd.DataFrame({
+            "Date": test.index,
+            "Actual Sales": y_test,
+            "ARIMA Forecast": forecast_arima.values,
+            "Linear Regression Forecast": lr_pred,
+            "Random Forest Forecast": rf_pred,
+            "LSTM Forecast": lstm_pred.flatten()
+        })
+        st.dataframe(forecast_table.set_index("Date"))
